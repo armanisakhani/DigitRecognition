@@ -1,0 +1,143 @@
+---
+title: "Final-Project"
+author: "Arman Isakhani Mamaghani"
+date: "February 6, 2016"
+output: html_document
+---
+
+This project is about digit recognition. let first load the data:
+
+```{r}
+rm(list=ls())
+library("data.table", lib.loc="~/R/win-library/3.2")
+
+tab5rows <- read.csv("train.csv", header = TRUE, nrows = 5)
+classes <- sapply(tab5rows, class)
+pixels <- as.matrix(read.csv("train.csv", header = TRUE, colClasses = classes))
+rm(classes , tab5rows)
+
+lables <- pixels[,1]
+pixels <- pixels[,-1]
+N <- nrow(pixels)
+```
+
+Every digit is a 28*28 pixels and intensity of eac pixels has intensity between (0,256).
+
+Let Plot some of the digits:
+
+```{r}
+colors<-c('white','black')
+cus_col<-colorRampPalette(colors=colors)
+par(mfrow=c(4,4),pty='s',mar=c(1.5,1.5,1.5,1.5),xaxt='n',yaxt='n')
+for(i in 1:16)
+{
+  z<-array(pixels[i,],dim=c(28,28))
+  z<-z[,28:1] ##right side up
+  image(z,main=lables[i],col=cus_col(256))
+}
+
+```
+
+First we split the data to training and test data:
+
+```{r}
+set.seed(1)
+train <- sample(c(TRUE,FALSE), nrow(pixels),rep=TRUE,prob = c(0.8,0.2))
+sum(train)/nrow(pixels)
+
+```
+
+
+We will find principle components and see which proportion of variance is explained by these components:
+
+```{r}
+pr.out <- prcomp(pixels[train, ])
+pr.var <- pr.out$sdev^2
+pve <- pr.var/sum(pr.var)
+resetPar <- function() {
+  dev.new()
+  op <- par(no.readonly = TRUE)
+  dev.off()
+  op
+}
+par(resetPar())
+par(mfrow = c(1,2))
+plot(pve, xlab="Principal Component", ylab="Proportion of Variance Explained", ylim=c(0,1),type='b')
+plot(cumsum(pve), xlab="Principal Component", ylab="Cumulative Proportion of Variance Explained", ylim=c(0,1),type='b')
+
+```
+
+Now we rotate our train and test data to new component space:
+
+```{r}
+test.rotated  <- pixels[!train, ] %*% pr.out$rotation
+train.rotated <- pixels[train, ] %*% pr.out$rotation
+
+```
+
+
+Let try to predict the test data by fitting a lda Model to train data:
+
+(Note: we test offline for choosing the best number of components to use and 60 was the best)
+
+```{r}
+library(MASS)
+
+rotated.Data <- pixels %*% pr.out$rotation
+rotated.Data <- data.frame(cbind("lables" =lables, rotated.Data[,1:60]))
+
+lda.fit=lda(lables ~ . ,data = rotated.Data, subset = train)
+lda.pred=predict(lda.fit, rotated.Data[!train,])
+table(lda.pred$class ,lables[!train])
+```
+
+Finding the test Error:
+
+```{r}
+result.lda <- data.table("predict" = lda.pred$class, "lable" = lables[!train])
+result.lda[, correct := lable == predict]
+print(paste0('Test error is: ', sum(result.lda[, correct])/ nrow(result.lda)))
+```
+
+Let's try to predict the test data by fitting a KNN Model to train data:
+
+(Note: we test offline for choosing the best number of components to use and 50 was the best.)
+
+```{r}
+library(FNN)
+knn.pred <- knn(train.rotated[,1:50], test.rotated[,1:50],lables[train] ,k=10)
+table(knn.pred ,lables[!train])
+```
+
+Finding the test Error:
+
+```{r}
+result.knn <- data.table("predict.knn" = knn.pred, "lable" = lables[!train])
+result.knn[, correct := lable == predict.knn]
+print(paste0('Test error is: ', sum(result.knn[, correct])/ nrow(result.knn)))
+```
+
+In final let look at the letter numbers that knn predict uncorrect:
+
+I run it before and attach the result as a pdf with the name 'not_correct_test_letters.pdf'
+
+Note: the numbers that is written above the pictures is the predicted number by knn.
+
+```{r}
+not.correct.predicted <- cbind(knn.pred[!result.knn[,correct]],
+                               (pixels[!train, ])[!result.knn[,correct],])
+
+colors<-c('white','black')
+cus_col<-colorRampPalette(colors=colors)
+f <- function(m) t(m)[,nrow(m):1]
+
+pdf('not_correct_test_letters.pdf')
+par(mfrow=c(4,4),pty='s',mar=c(2,2,2,2),xaxt='n',yaxt='n')
+for(i in 1:nrow(not.correct.predicted))
+{
+  M = matrix(not.correct.predicted[i,-1],c(28,28) , byrow =TRUE)
+  image(1:28, 1:28, f(M),main=not.correct.predicted[i,1]-1, col = cus_col(256))
+}
+dev.off()
+
+```
